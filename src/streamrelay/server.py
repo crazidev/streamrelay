@@ -376,6 +376,12 @@ class StreamServer:
                 await watcher
             except asyncio.CancelledError:
                 pass
+        # Close all WebRTC peer connections
+        for pc in list(app.get("whip_sessions", {}).values()):
+            try:
+                await pc.close()
+            except Exception:
+                pass
         if self._shm is not None:
             self._shm.close()
 
@@ -392,12 +398,21 @@ class StreamServer:
         app = web.Application()
         app.on_startup.append(self._on_startup)
         app.on_shutdown.append(self._on_shutdown)
+        app["whip_sessions"] = {}   # session_id → RTCPeerConnection
 
         app.router.add_get("/", self._index)
         app.router.add_get("/app.js", self._javascript)
         app.router.add_get("/style.css", self._css)
         app.router.add_get("/ws", self._ws_stream)
         app.router.add_get("/livereload", self._livereload_sse)
+
+        # ── WebRTC signaling endpoint ─────────────────────────────────────
+        # Browser POSTs its SDP offer here, gets SDP answer back.
+        # No STUN/TURN needed on LAN — host candidates are sufficient.
+        app.router.add_route("POST",   "/webrtc",        self._webrtc_offer)
+        app.router.add_route("DELETE", "/webrtc/{sid}",  self._webrtc_delete)
+        app.router.add_route("GET",    "/webrtc/health", self._webrtc_health)
+        app.router.add_route("OPTIONS", "/webrtc",       self._webrtc_options)
 
         ssl_ctx = self._build_ssl_context()
 
@@ -408,12 +423,14 @@ class StreamServer:
                 http_site = web.TCPSite(runner, self.host, self.http_port)
                 await http_site.start()
                 print(f"[streamrelay] HTTP  on {self.host}:{self.http_port}")
+                print(f"[streamrelay] WHIP  endpoint: http://{self.host}:{self.http_port}/whip")
             if ssl_ctx and self.https_port:
                 https_site = web.TCPSite(
                     runner, self.host, self.https_port, ssl_context=ssl_ctx
                 )
                 await https_site.start()
                 print(f"[streamrelay] HTTPS on {self.host}:{self.https_port}")
+                print(f"[streamrelay] WHIP  endpoint: https://{self.host}:{self.https_port}/whip")
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -429,6 +446,143 @@ class StreamServer:
                     self._shm.unlink()
                 except Exception:
                     pass
+
+    # ── WebRTC handlers (aiortc, LAN — no STUN/TURN needed) ──────────────────
+
+    async def _webrtc_options(self, request: web.Request) -> web.Response:
+        """CORS preflight."""
+        return web.Response(
+            status=204,
+            headers={
+                "Access-Control-Allow-Origin":   "*",
+                "Access-Control-Allow-Methods":  "POST, DELETE, OPTIONS",
+                "Access-Control-Allow-Headers":  "Content-Type",
+                "Access-Control-Max-Age":        "86400",
+            },
+        )
+
+    async def _webrtc_health(self, request: web.Request) -> web.Response:
+        sessions = request.app.get("whip_sessions", {})
+        return web.json_response({
+            "ok": True,
+            "sessions": len(sessions),
+            "protocol": "webrtc",
+        })
+
+    async def _webrtc_offer(self, request: web.Request) -> web.Response:
+        """
+        Receive an SDP offer from the browser, return an SDP answer.
+
+        The browser sends its complete local description (all ICE candidates
+        already gathered — vanilla ICE). On LAN, host candidates are
+        sufficient — no STUN/TURN needed.
+        """
+        try:
+            from aiortc import RTCPeerConnection, RTCSessionDescription
+            from aiortc.contrib.media import MediaBlackhole
+        except ImportError:
+            return web.Response(status=501, text="aiortc not installed")
+
+        body = await request.read()
+        if not body:
+            return web.Response(status=400, text="Empty SDP offer")
+
+        import uuid
+        session_id = str(uuid.uuid4())
+        sessions = request.app.setdefault("whip_sessions", {})
+
+        # No ICE servers — LAN host candidates are sufficient
+        pc = RTCPeerConnection()
+        sessions[session_id] = pc
+
+        @pc.on("connectionstatechange")
+        async def on_state():
+            state = pc.connectionState
+            print(f"[streamrelay/WebRTC] Session {session_id[:8]} → {state}")
+            if state in ("failed", "closed", "disconnected"):
+                sessions.pop(session_id, None)
+                try:
+                    await pc.close()
+                except Exception:
+                    pass
+
+        @pc.on("track")
+        def on_track(track):
+            print(f"[streamrelay/WebRTC] Track: kind={track.kind}")
+            if track.kind == "video":
+                asyncio.ensure_future(self._consume_webrtc_video(track))
+            elif track.kind == "audio":
+                sink = MediaBlackhole()
+                sink.addTrack(track)
+                asyncio.ensure_future(sink.start())
+
+        offer = RTCSessionDescription(
+            sdp=body.decode("utf-8", errors="replace"),
+            type="offer",
+        )
+        await pc.setRemoteDescription(offer)
+        answer = await pc.createAnswer()
+        await pc.setLocalDescription(answer)
+
+        # Wait for ICE gathering — on LAN this is near-instant (< 200ms)
+        ice_complete = asyncio.Event()
+
+        @pc.on("icegatheringstatechange")
+        def on_ice():
+            if pc.iceGatheringState == "complete":
+                ice_complete.set()
+
+        if pc.iceGatheringState != "complete":
+            try:
+                await asyncio.wait_for(ice_complete.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                print("[streamrelay/WebRTC] ICE gathering timed out")
+
+        return web.Response(
+            status=200,
+            body=pc.localDescription.sdp.encode(),
+            content_type="application/sdp",
+            headers={
+                "X-Session-Id":                  session_id,
+                "Access-Control-Allow-Origin":   "*",
+                "Access-Control-Expose-Headers": "X-Session-Id",
+            },
+        )
+
+    async def _webrtc_delete(self, request: web.Request) -> web.Response:
+        """Close a WebRTC session."""
+        session_id = request.match_info["sid"]
+        sessions = request.app.get("whip_sessions", {})
+        pc = sessions.pop(session_id, None)
+        if pc is not None:
+            try:
+                await pc.close()
+            except Exception:
+                pass
+            return web.Response(status=200, text="Session closed")
+        return web.Response(status=404, text="Session not found")
+
+    async def _consume_webrtc_video(self, track) -> None:
+        """Decode WebRTC video frames and write them to shared memory."""
+        print("[streamrelay/WebRTC] Consuming video track")
+        frame_count = 0
+        start_time = time.time()
+        try:
+            while True:
+                frame = await track.recv()
+                img = frame.to_ndarray(format="bgr24")
+                if img is not None and img.size > 0:
+                    self._dispatch_frame(img)
+                    frame_count += 1
+                    now = time.time()
+                    if now - start_time >= 5.0:
+                        fps = frame_count / (now - start_time)
+                        print(f"[streamrelay/WebRTC] {frame_count} frames, {fps:.1f} FPS")
+                        frame_count = 0
+                        start_time = now
+        except Exception as exc:
+            if "MediaStreamError" not in type(exc).__name__:
+                print(f"[streamrelay/WebRTC] Video track ended: {exc}")
 
     # ── Helpers ──────────────────────────────────────────────────────────────
     def _build_ssl_context(self) -> Optional[ssl.SSLContext]:

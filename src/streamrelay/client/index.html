@@ -27,12 +27,12 @@
         <span class="stat-value" id="statResolution">—</span>
       </div>
       <div class="stat-item">
-        <span class="stat-label">Codec</span>
+        <span class="stat-label">Mode</span>
         <span class="stat-value stat-codec" id="statCodec">—</span>
       </div>
     </div>
 
-    <!-- Video preview — fills all remaining space -->
+    <!-- Video preview -->
     <div class="video-container" id="videoContainer">
       <video id="localVideo" autoplay muted playsinline></video>
       <div class="video-overlay" id="videoOverlay">
@@ -51,7 +51,7 @@
           <span>StreamRelay</span>
         </div>
         <div class="panel-header-actions">
-          <button class="icon-btn" id="themeBtn" aria-label="Toggle light/dark mode" title="Toggle theme">
+          <button class="icon-btn" id="themeBtn" aria-label="Toggle theme">
             <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
             </svg>
@@ -76,6 +76,23 @@
       </div>
 
       <div class="panel-body" id="panelBody">
+
+        <!-- Transport mode selector — dropdown with auto + explicit options -->
+        <div class="select-row">
+          <label for="transportSelect">Transport</label>
+          <select id="transportSelect">
+            <option value="auto" selected>Auto (WebRTC → H.264 → JPEG)</option>
+            <option value="webrtc">WebRTC</option>
+            <option value="ws-h264">WS H.264 (WebCodecs)</option>
+            <option value="ws-jpeg">WS JPEG</option>
+          </select>
+        </div>
+
+        <!-- Active transport badge — shown while streaming to indicate what auto picked -->
+        <div class="capability-row" id="capabilityRow" style="display:none">
+          <span class="cap-badge" id="capBadge">—</span>
+        </div>
+
         <div class="select-row">
           <label for="cameraSelect">Camera</label>
           <select id="cameraSelect"></select>
@@ -88,18 +105,13 @@
             <option value="1920x1080">1920 × 1080</option>
           </select>
         </div>
-        <div class="select-row">
-          <label for="codecSelect">Codec</label>
-          <select id="codecSelect">
-            <option value="auto" selected>Auto</option>
-            <option value="h264">H.264 (WebCodecs)</option>
-            <option value="jpeg">JPEG</option>
-          </select>
-        </div>
-        <div class="select-row quality-row" id="qualityRow">
+
+        <!-- Quality — only shown for JPEG mode -->
+        <div class="select-row quality-row" id="qualityRow" style="display:none">
           <label for="qualityRange">Quality <span id="qualityLabel">85%</span></label>
           <input type="range" id="qualityRange" min="30" max="95" step="5" value="85" />
         </div>
+
       </div>
 
       <button id="streamBtn" class="btn-stream">
