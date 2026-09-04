@@ -1,5 +1,5 @@
 /* StreamRelay — Multi-transport streaming client
- * Transport: Auto (WebRTC → WS H.264 → WS JPEG) | WebRTC | WS H.264 | WS JPEG
+ * Transport: Auto (WS H.264 → WS JPEG) | WS H.264 | WS JPEG
  *
  * Auto mode tries each transport in priority order and falls back silently.
  * The dropdown updates to show which transport was actually used.
@@ -33,12 +33,8 @@ const capBadge         = document.getElementById('capBadge');
 // ── State ─────────────────────────────────────────────────────────────────────
 let localStream  = null;
 let isStreaming  = false;
-/** @type {'webrtc'|'ws-h264'|'ws-jpeg'} Active transport actually in use */
+/** @type {'ws-h264'|'ws-jpeg'} Active transport actually in use */
 let activeMode   = null;
-
-// WebRTC
-let pc           = null;
-let rtcSessionId = null;
 
 // WebSocket
 let ws           = null;
@@ -57,7 +53,6 @@ let bytesSent       = 0;
 let lastStatsTime   = 0;
 let lastStatsFrames = 0;
 let lastStatsBytes  = 0;
-let lastRtcStats    = null;
 
 const TARGET_FPS = 30;
 
@@ -92,8 +87,8 @@ function setStreamBtn(state) {
   }
 }
 
-const MODE_LABELS = { 'webrtc': 'WebRTC', 'ws-h264': 'H.264', 'ws-jpeg': 'JPEG' };
-const MODE_CSS    = { 'webrtc': 'stat-codec--webrtc', 'ws-h264': 'stat-codec--h264', 'ws-jpeg': 'stat-codec--jpeg' };
+const MODE_LABELS = { 'ws-h264': 'H.264', 'ws-jpeg': 'JPEG' };
+const MODE_CSS    = { 'ws-h264': 'stat-codec--h264', 'ws-jpeg': 'stat-codec--jpeg' };
 
 /**
  * Called once a transport is confirmed active.
@@ -126,7 +121,6 @@ function onTransportChange() {
 transportSelect.addEventListener('change', onTransportChange);
 
 // ── Capability detection ──────────────────────────────────────────────────────
-function webRTCSupported()    { return typeof RTCPeerConnection !== 'undefined'; }
 function webCodecsSupported() { return typeof VideoEncoder !== 'undefined' && typeof VideoFrame !== 'undefined'; }
 
 // ── Stream button ─────────────────────────────────────────────────────────────
@@ -135,29 +129,12 @@ streamBtn.addEventListener('click', () => { if (isStreaming) cleanUp(); else sta
 // ── Stats ─────────────────────────────────────────────────────────────────────
 function startStats() {
   lastStatsTime = performance.now(); lastStatsFrames = 0; lastStatsBytes = 0;
-  statsInterval = setInterval(async () => {
+  statsInterval = setInterval(() => {
     const now = performance.now(), elapsed = (now - lastStatsTime) / 1000;
     if (elapsed < 0.5) return;
-    if (activeMode === 'webrtc' && pc) {
-      try {
-        const stats = await pc.getStats();
-        stats.forEach(r => {
-          if (r.type === 'outbound-rtp' && r.kind === 'video') {
-            statFps.textContent = (r.framesPerSecond || 0).toFixed(0);
-            if (lastRtcStats) {
-              let prev = 0; lastRtcStats.forEach(p => { if (p.type === 'outbound-rtp' && p.kind === 'video') prev = p.bytesSent || 0; });
-              const kbps = Math.round(((r.bytesSent - prev) * 8) / elapsed / 1000);
-              statBitrate.textContent = kbps > 1000 ? (kbps / 1000).toFixed(1) + ' Mbps' : kbps + ' kbps';
-            }
-          }
-        });
-        lastRtcStats = stats;
-      } catch (_) {}
-    } else {
-      statFps.textContent = String(Math.round((framesSent - lastStatsFrames) / elapsed));
-      const kbps = Math.round(((bytesSent - lastStatsBytes) * 8) / elapsed / 1000);
-      statBitrate.textContent = kbps > 1000 ? (kbps / 1000).toFixed(1) + ' Mbps' : kbps + ' kbps';
-    }
+    statFps.textContent = String(Math.round((framesSent - lastStatsFrames) / elapsed));
+    const kbps = Math.round(((bytesSent - lastStatsBytes) * 8) / elapsed / 1000);
+    statBitrate.textContent = kbps > 1000 ? (kbps / 1000).toFixed(1) + ' Mbps' : kbps + ' kbps';
     lastStatsTime = now; lastStatsFrames = framesSent; lastStatsBytes = bytesSent;
   }, 1000);
 }
@@ -166,7 +143,7 @@ function stopStats() {
   if (statsInterval) { clearInterval(statsInterval); statsInterval = null; }
   statFps.textContent = '0'; statBitrate.textContent = '0 kbps';
   statResolution.textContent = '—'; statCodec.textContent = '—';
-  statCodec.className = 'stat-value stat-codec'; lastRtcStats = null;
+  statCodec.className = 'stat-value stat-codec';
 }
 
 // ── Cameras ───────────────────────────────────────────────────────────────────
@@ -217,10 +194,15 @@ function restoreCameraSelection() {
 // ── Main entry ────────────────────────────────────────────────────────────────
 async function startStreaming() {
   setStatus('connecting'); setStreamBtn('connecting');
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    alert('Camera access unavailable. Mobile browsers require HTTPS for camera. Please connect via https:// (e.g. https://IP:9090/) and accept the certificate.');
+    setStatus('error'); setStreamBtn('idle'); return;
+  }
   try {
     localStream = await navigator.mediaDevices.getUserMedia(getConstraints());
   } catch (err) {
     console.error('[Stream] Camera error:', err);
+    alert('Camera error: ' + err.name + ' - ' + err.message + '\nPlease check camera permissions.');
     setStatus('error'); setStreamBtn('idle'); return;
   }
   const track = localStream.getVideoTracks()[0];
@@ -231,9 +213,6 @@ async function startStreaming() {
 
   if (choice === 'auto') {
     await startAuto();
-  } else if (choice === 'webrtc') {
-    const ok = await tryWebRTC();
-    if (!ok) { cleanUp(); alert('WebRTC failed. Try WS H.264 or WS JPEG.'); }
   } else if (choice === 'ws-h264') {
     await startWebSocket('h264', /*allowFallback=*/false);
   } else {
@@ -242,78 +221,20 @@ async function startStreaming() {
 }
 
 /**
- * Auto mode: try WebRTC → WS H.264 → WS JPEG in order.
+ * Auto mode: try WS H.264 → WS JPEG in order.
  * Each failure is silent; the next is tried automatically.
  */
 async function startAuto() {
-  // 1. WebRTC
-  if (webRTCSupported()) {
-    console.log('[Auto] Trying WebRTC...');
-    const ok = await tryWebRTC();
-    if (ok) return;
-    console.log('[Auto] WebRTC failed, trying WS H.264...');
-  }
-  // 2. WS H.264
+  // 1. WS H.264
   if (webCodecsSupported()) {
     console.log('[Auto] Trying WS H.264...');
     const ok = await tryWebSocket('h264');
     if (ok) return;
     console.log('[Auto] WS H.264 failed, falling back to WS JPEG...');
   }
-  // 3. WS JPEG (always works)
+  // 2. WS JPEG (always works)
   console.log('[Auto] Using WS JPEG');
   await startWebSocket('jpeg', false);
-}
-
-// ── WebRTC ────────────────────────────────────────────────────────────────────
-/** @returns {Promise<boolean>} true if connected successfully */
-async function tryWebRTC() {
-  try {
-    pc = new RTCPeerConnection({ iceServers: [] });
-    localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
-
-    localVideo.srcObject = localStream;
-    localVideo.classList.add('visible');
-    videoOverlay.classList.add('hidden');
-
-    const offer = await pc.createOffer({ offerToReceiveAudio: false, offerToReceiveVideo: false });
-    await pc.setLocalDescription(offer);
-
-    // Wait for ICE gathering (LAN = fast)
-    await new Promise(resolve => {
-      if (pc.iceGatheringState === 'complete') { resolve(); return; }
-      const check = () => { if (pc.iceGatheringState === 'complete') { pc.removeEventListener('icegatheringstatechange', check); resolve(); } };
-      pc.addEventListener('icegatheringstatechange', check);
-      setTimeout(resolve, 3000);
-    });
-
-    const resp = await fetch('/webrtc', { method: 'POST', headers: { 'Content-Type': 'application/sdp' }, body: pc.localDescription.sdp });
-    if (!resp.ok) throw new Error(`Server ${resp.status}`);
-
-    rtcSessionId = resp.headers.get('X-Session-Id');
-    await pc.setRemoteDescription({ type: 'answer', sdp: await resp.text() });
-
-    await new Promise((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error('ICE timeout')), 10000);
-      pc.addEventListener('connectionstatechange', () => {
-        const st = pc.connectionState;
-        if (st === 'connected') { clearTimeout(t); resolve(); }
-        else if (st === 'failed' || st === 'closed') { clearTimeout(t); reject(new Error(st)); }
-      });
-    });
-
-    onTransportActive('webrtc');
-    setStatus('active'); setStreamBtn('streaming'); startStats();
-    pc.addEventListener('connectionstatechange', () => {
-      if (pc && (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') && isStreaming) { setStatus('error'); cleanUp(); }
-    });
-    return true;
-  } catch (err) {
-    console.warn('[WebRTC] Failed:', err.message);
-    if (pc) { try { pc.close(); } catch(_){} pc = null; }
-    localVideo.srcObject = null; localVideo.classList.remove('visible'); videoOverlay.classList.remove('hidden');
-    return false;
-  }
 }
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────
@@ -335,7 +256,8 @@ async function startWebSocket(codec, reportResult = false, onResult = null) {
   const maxDim = Math.max(selW, selH);
   let sW = nW, sH = nH;
   if (Math.max(nW, nH) > maxDim) { const sc = maxDim / Math.max(nW, nH); sW = Math.round(nW * sc); sH = Math.round(nH * sc); }
-  sW -= sW % 2; sH -= sH % 2;
+  sW = Math.max(16, Math.round(sW / 16) * 16);
+  sH = Math.max(16, Math.round(sH / 2) * 2);
   statResolution.textContent = `${sW}×${sH}`;
 
   mirrorCanvas = document.createElement('canvas'); mirrorCanvas.width = sW; mirrorCanvas.height = sH; mirrorCtx = mirrorCanvas.getContext('2d');
@@ -387,60 +309,175 @@ async function startWebSocket(codec, reportResult = false, onResult = null) {
 
 // ── H.264 WebCodecs encoder ───────────────────────────────────────────────────
 async function initH264Encoder(width, height) {
-  const cfg = { codec: 'avc1.42001f', width, height, bitrate: 6_000_000, framerate: TARGET_FPS, latencyMode: 'quality', hardwareAcceleration: 'prefer-hardware', avc: { format: 'annexb' } };
-  let sup = await VideoEncoder.isConfigSupported(cfg);
-  if (!sup.supported) { cfg.hardwareAcceleration = 'no-preference'; sup = await VideoEncoder.isConfigSupported(cfg); }
-  if (!sup.supported) throw new Error('H.264 not supported');
+  // Determine candidates based on frame resolution.
+  // Level 3.1 (0x1f) is limited to 720p by H.264 specification.
+  // 1080p requires Level 4.0 (0x28), Level 4.2 (0x2a), or higher.
+  const isHighRes = (width * height > 1280 * 720);
+  const candidates = isHighRes
+    ? [
+        'avc1.42002a', // Baseline Level 4.2 (1080p60)
+        'avc1.420028', // Baseline Level 4.0 (1080p30)
+        'avc1.4d002a', // Main Level 4.2
+        'avc1.64002a', // High Level 4.2
+        'avc1.420033', // Baseline Level 5.1 (4K)
+        'avc1.640033', // High Level 5.1 (4K)
+        'avc1.42001f', // Fallback
+      ]
+    : [
+        'avc1.42001f', // Baseline Level 3.1 (<= 720p)
+        'avc1.4d001f', // Main Level 3.1
+        'avc1.420028', // Baseline Level 4.0
+        'avc1.42002a', // Baseline Level 4.2
+        'avc1.64002a', // High Level 4.2
+      ];
+
+  const bitrate = (width * height >= 1920 * 1080)
+    ? 6_000_000
+    : (width * height >= 1280 * 720 ? 4_000_000 : 2_000_000);
+
+  let activeCfg = null;
+  for (const c of candidates) {
+    for (const accel of ['prefer-hardware', 'no-preference']) {
+      for (const latMode of ['realtime', 'quality']) {
+        const testCfg = {
+          codec: c,
+          width,
+          height,
+          bitrate,
+          framerate: TARGET_FPS,
+          latencyMode: latMode,
+          hardwareAcceleration: accel,
+          avc: { format: 'annexb' },
+        };
+        try {
+          const sup = await VideoEncoder.isConfigSupported(testCfg);
+          if (sup && sup.supported) {
+            activeCfg = testCfg;
+            break;
+          }
+        } catch (_) {}
+      }
+      if (activeCfg) break;
+    }
+    if (activeCfg) break;
+  }
+
+  if (!activeCfg) {
+    throw new Error(`H.264 encoding not supported for ${width}x${height}`);
+  }
+
+  console.log(`[H264] Configured: ${activeCfg.codec}, accel=${activeCfg.hardwareAcceleration}, lat=${activeCfg.latencyMode}, ${width}x${height} @ ${bitrate / 1e6}Mbps`);
+
   encoder = new VideoEncoder({
     output: (chunk, meta) => {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      const data = new Uint8Array(chunk.byteLength); chunk.copyTo(data);
-      if (chunk.type === 'key' && meta?.decoderConfig?.description) {
+      const data = new Uint8Array(chunk.byteLength);
+      chunk.copyTo(data);
+      let payload = data;
+      const hasStartCode = (data.length >= 4 && data[0] === 0 && data[1] === 0 && (data[2] === 1 || (data[2] === 0 && data[3] === 1)));
+      if (!hasStartCode && chunk.type === 'key' && meta?.decoderConfig?.description) {
         const desc = new Uint8Array(meta.decoderConfig.description);
-        const buf = new Uint8Array(desc.length + data.length); buf.set(desc, 0); buf.set(data, desc.length);
-        ws.send(buf.buffer); bytesSent += buf.byteLength;
-      } else { ws.send(data.buffer); bytesSent += data.byteLength; }
+        const buf = new Uint8Array(desc.length + data.length);
+        buf.set(desc, 0);
+        buf.set(data, desc.length);
+        payload = buf;
+      }
+      const pkt = new Uint8Array(9 + payload.byteLength);
+      pkt[0] = 0x03; // Tag 0x03: video frame with uint64 capture timestamp (ms)
+      new DataView(pkt.buffer).setBigUint64(1, BigInt(Date.now()), false);
+      pkt.set(payload, 9);
+      ws.send(pkt.buffer);
+      bytesSent += pkt.byteLength;
       framesSent++;
     },
-    error: e => { console.error('[H264]', e); if (encoder) { encoder.close(); encoder = null; } },
+    error: e => {
+      console.error('[H264] Encoder error:', e);
+      if (encoder) {
+        try { encoder.close(); } catch (_) {}
+        encoder = null;
+      }
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        console.warn('[H264] Falling back to JPEG due to encoder error');
+        ws.send(JSON.stringify({ type: 'codec', codec: 'jpeg', width, height }));
+        onTransportActive('ws-jpeg');
+      }
+    },
   });
-  encoder.configure(cfg);
+
+  encoder.configure(activeCfg);
 }
 
 // ── Canvas draw (mirrored) ────────────────────────────────────────────────────
 function drawMirrored(ctx, canvas, video) {
-  ctx.save(); ctx.translate(canvas.width, 0); ctx.scale(-1, 1);
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height); ctx.restore();
+  ctx.save();
+  ctx.translate(canvas.width, 0);
+  ctx.scale(-1, 1);
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  ctx.restore();
 }
 
 // ── Capture loop ──────────────────────────────────────────────────────────────
 function startCaptureLoop(codec) {
-  let lastTime = 0; const interval = 1000 / TARGET_FPS;
-  let cA = sendCanvas, ctxA = sendCtx;
-  let cB = document.createElement('canvas'); cB.width = sendCanvas.width; cB.height = sendCanvas.height;
-  let ctxB = cB.getContext('2d', { willReadFrequently: false });
-  let useA = true, fi = 0;
+  let lastTime = 0;
+  const interval = 1000 / TARGET_FPS;
+  let isEncoding = false;
+  let fi = 0;
 
   function capture(ts) {
     captureLoop = requestAnimationFrame(capture);
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     if (!hiddenVideo || hiddenVideo.readyState < 2) return;
-    if (ts - lastTime < interval) return; lastTime = ts;
-    if (ws.bufferedAmount > 512 * 1024) return;
 
+    // Always keep mirrored local preview updated at screen refresh rate
     drawMirrored(mirrorCtx, mirrorCanvas, hiddenVideo);
-    const canv = useA ? cA : cB, ctx = useA ? ctxA : ctxB;
-    drawMirrored(ctx, canv, hiddenVideo); useA = !useA;
 
     if (codec === 'h264' && encoder && encoder.state === 'configured') {
-      const frame = new VideoFrame(canv, { timestamp: fi * interval * 1000 });
-      encoder.encode(frame, { keyFrame: fi % 60 === 0 }); frame.close(); fi++; return;
+      if (ts - lastTime < interval) return;
+      lastTime = ts;
+      drawMirrored(sendCtx, sendCanvas, hiddenVideo);
+      const frame = new VideoFrame(sendCanvas, { timestamp: Math.round(performance.now() * 1000) });
+      encoder.encode(frame, { keyFrame: fi % 60 === 0 });
+      frame.close();
+      fi++;
+      return;
     }
-    canv.toBlob(blob => {
-      if (!blob || !ws || ws.readyState !== WebSocket.OPEN) return;
-      blob.arrayBuffer().then(buf => { if (!ws || ws.readyState !== WebSocket.OPEN) return; ws.send(buf); framesSent++; bytesSent += buf.byteLength; });
+
+    // JPEG mode: rate-limited and strictly in-flight gated.
+    // Prevents parallel encodings, canvas race conditions, and out-of-order frame delivery.
+    if (ts - lastTime < interval) return;
+    if (isEncoding) return;
+    if (ws.bufferedAmount > 256 * 1024) return;
+
+    lastTime = ts;
+    isEncoding = true;
+    drawMirrored(sendCtx, sendCanvas, hiddenVideo);
+    const captureTs = Date.now();
+
+    sendCanvas.toBlob(blob => {
+      if (!blob || !ws || ws.readyState !== WebSocket.OPEN) {
+        isEncoding = false;
+        return;
+      }
+      blob.arrayBuffer().then(buf => {
+        try {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            const pkt = new Uint8Array(9 + buf.byteLength);
+            pkt[0] = 0x03; // Tag 0x03: video frame with uint64 capture timestamp (ms)
+            new DataView(pkt.buffer).setBigUint64(1, BigInt(captureTs), false);
+            pkt.set(new Uint8Array(buf), 9);
+            ws.send(pkt.buffer);
+            framesSent++;
+            bytesSent += pkt.byteLength;
+          }
+        } finally {
+          isEncoding = false;
+        }
+      }).catch(() => {
+        isEncoding = false;
+      });
     }, 'image/jpeg', getQuality());
   }
+
   captureLoop = requestAnimationFrame(capture);
 }
 
@@ -456,7 +493,6 @@ function cleanUpWS() {
 // ── Full cleanup ──────────────────────────────────────────────────────────────
 function cleanUp() {
   stopStats();
-  if (pc) { if (rtcSessionId) fetch(`/webrtc/${rtcSessionId}`, { method: 'DELETE' }).catch(() => {}); try { pc.close(); } catch(_){} pc = null; rtcSessionId = null; }
   cleanUpWS();
   if (localStream) { localStream.getTracks().forEach(t => t.stop()); localStream = null; }
   activeMode = null;

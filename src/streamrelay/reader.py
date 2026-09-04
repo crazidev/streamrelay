@@ -59,6 +59,7 @@ class FrameReader:
         self.shm_name = shm_name
         self._shm: Optional[SharedMemory] = None
         self._last_counter = 0
+        self._skip_count: int = 0
         self._attach(attach_timeout)
 
     # ── Lifecycle ────────────────────────────────────────────────────────────
@@ -122,12 +123,21 @@ class FrameReader:
         if counter == 0 or w == 0 or h == 0:
             return None
         nbytes = w * h * 3
+        if protocol.SHM_HEADER_BYTES + nbytes > len(self._shm.buf):
+            return None
         raw = bytes(
             self._shm.buf[protocol.SHM_HEADER_BYTES:
                           protocol.SHM_HEADER_BYTES + nbytes]
         )
-        frame = np.frombuffer(raw, dtype=np.uint8).reshape((h, w, 3)).copy()
+        try:
+            frame = np.frombuffer(raw, dtype=np.uint8).reshape((h, w, 3)).copy()
+        except ValueError:
+            return None
+        prev = self._last_counter
         self._last_counter = counter
+        # Frames overwritten between reads (wrap-safe at 2^32).
+        delta = int((counter - prev) & 0xFFFFFFFF)
+        self._skip_count = max(0, delta - 1)
         return frame, FrameInfo(counter=counter, width=w, height=h)
 
     def read_new(self) -> Optional[np.ndarray]:
@@ -145,15 +155,41 @@ class FrameReader:
         if counter == 0 or counter == self._last_counter or w == 0 or h == 0:
             return None
         nbytes = w * h * 3
+        if protocol.SHM_HEADER_BYTES + nbytes > len(self._shm.buf):
+            return None
         raw = bytes(
             self._shm.buf[protocol.SHM_HEADER_BYTES:
                           protocol.SHM_HEADER_BYTES + nbytes]
         )
-        frame = np.frombuffer(raw, dtype=np.uint8).reshape((h, w, 3)).copy()
+        try:
+            frame = np.frombuffer(raw, dtype=np.uint8).reshape((h, w, 3)).copy()
+        except ValueError:
+            return None
+        prev = self._last_counter
         self._last_counter = counter
+        # Frames overwritten between reads (wrap-safe at 2^32).
+        delta = int((counter - prev) & 0xFFFFFFFF)
+        self._skip_count = max(0, delta - 1)
         return frame, FrameInfo(counter=counter, width=w, height=h)
 
     # ── Misc ────────────────────────────────────────────────────────────────
     @property
     def last_counter(self) -> int:
         return self._last_counter
+
+    @property
+    def skip_count(self) -> int:
+        """Frames written to SHM between the last two successful reads.
+
+        ``0`` means you read every frame the server produced.
+        ``> 0`` means your consumer is slower than the camera — that many
+        frames were overwritten before you polled again.
+
+        Example::
+
+            while True:
+                frame = reader.read_latest()
+                if frame is not None and reader.skip_count > 5:
+                    print("Pipeline falling behind — consider reducing resolution")
+        """
+        return self._skip_count

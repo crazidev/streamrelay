@@ -4,14 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "streamrelay"
-version = "0.2.0"
+version = "0.3.0"
 description = "Low-latency video streaming from phone/browser to Python over WebSocket with shared-memory delivery."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "streamrelay contributors" }]
 keywords = [
-    "webrtc",
     "websocket",
     "streaming",
     "video",
@@ -38,18 +37,25 @@ dependencies = [
     "numpy>=1.24",
     "opencv-python>=4.5",
     "cryptography>=41",
+    "pyvirtualcam>=0.11",
+    "av>=11",
+    "rich>=13",
+    "psutil>=5.9",
 ]
 
 [project.optional-dependencies]
-h264   = ["av>=11"]
-psutil = ["psutil>=5.9"]
+h264    = ["av>=11"]
+psutil  = ["psutil>=5.9"]
+virtual = ["pyvirtualcam>=0.11"]
+cli     = ["rich>=13"]
+all     = ["av>=11", "pyvirtualcam>=0.11", "rich>=13", "psutil>=5.9"]
 
 [project.urls]
-Homepage = "https://github.com/visomaster/streamrelay"
-Source   = "https://github.com/visomaster/streamrelay"
+Homepage = "https://github.com/crazidev/streamrelay"
+Source   = "https://github.com/crazidev/streamrelay"
 
 [project.scripts]
-streamrelay-server = "streamrelay.server:_cli"
+streamrelay-server = "streamrelay.cli:main"
 
 [tool.setuptools.packages.find]
 where   = ["src"]
@@ -57,3 +63,4 @@ include = ["streamrelay*"]
 
 [tool.setuptools.package-data]
 streamrelay = ["client/*.html", "client/*.js", "client/*.css"]
+

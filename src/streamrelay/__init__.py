@@ -1,10 +1,10 @@
-"""streamrelay — low-latency video streaming over WebSocket.
+"""streamrelay — low-latency video streaming over WebSocket and SRT.
 
 A lightweight module for streaming camera frames from a browser or mobile
-device to any Python process. Supports WebSocket transport with JPEG or
-H.264 encoding, and WebRTC when browser compatibility allows.
+device (via the native Flutter app) to any Python process.  Supports
+WebSocket transport (JPEG or H.264) and SRT (H.264) for remote/Starlink links.
 
-Frames arrive over WebSocket, get decoded to BGR, and land in a named
+Frames arrive over WebSocket or SRT, get decoded to BGR, and land in a named
 shared-memory block that any consumer process can poll with O(1) latency.
 No multiprocessing queues, no pickling, no sockets in the consumer.
 
@@ -32,7 +32,7 @@ See the README for integration examples and advanced usage.
 """
 
 from .reader import FrameReader, FrameInfo
-from .server import StreamServer, run_server
+from .server import StreamServer, SRTListener, VirtualCameraOutput, run_server
 from .protocol import (
     DEFAULT_SHM_NAME,
     SHM_HEADER_BYTES,
@@ -46,6 +46,8 @@ __all__ = [
     "FrameReader",
     "FrameInfo",
     "StreamServer",
+    "SRTListener",
+    "VirtualCameraOutput",
     "run_server",
     "DEFAULT_SHM_NAME",
     "SHM_HEADER_BYTES",
@@ -55,4 +57,4 @@ __all__ = [
     "SHM_TOTAL_BYTES",
 ]
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"

@@ -330,7 +330,6 @@ input[type='range']::-moz-range-thumb {
 /* ── Codec badge ───────────────────────────────────────────────────────── */
 .stat-codec--h264   { color: var(--green); }
 .stat-codec--jpeg   { color: var(--text-muted); }
-.stat-codec--webrtc { color: var(--accent); }
 
 /* ── Capability / auto-selected badge ─────────────────────────────────── */
 .capability-row { margin-top: -0.2rem; }
@@ -344,7 +343,6 @@ input[type='range']::-moz-range-thumb {
   background: var(--surface2);
   line-height: 1.4;
 }
-.cap-badge--webrtc  { border-color: rgba(124,106,247,0.4); color: var(--accent); background: rgba(124,106,247,0.08); }
 .cap-badge--ws-h264 { border-color: rgba(26,188,156,0.4);  color: var(--green);  background: rgba(26,188,156,0.08); }
 .cap-badge--ws-jpeg { border-color: var(--border); }
 

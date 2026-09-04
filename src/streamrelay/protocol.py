@@ -20,9 +20,9 @@ import struct
 # ── Defaults that callers can override per StreamServer instance ─────────────
 DEFAULT_SHM_NAME: str = "streamrelay_frame"
 
-SHM_MAX_WIDTH:    int = 1920
-SHM_MAX_HEIGHT:   int = 1080
-SHM_FRAME_BYTES:  int = SHM_MAX_WIDTH * SHM_MAX_HEIGHT * 3  # BGR
+SHM_MAX_WIDTH:    int = 3840
+SHM_MAX_HEIGHT:   int = 2160
+SHM_FRAME_BYTES:  int = SHM_MAX_WIDTH * SHM_MAX_HEIGHT * 3  # BGR (~24.8 MB, accommodates up to 4K / portrait 1088x1920)
 SHM_HEADER_BYTES: int = 12                                  # counter + W + H
 SHM_TOTAL_BYTES:  int = SHM_HEADER_BYTES + SHM_FRAME_BYTES
 
