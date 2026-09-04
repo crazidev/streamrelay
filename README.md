@@ -80,13 +80,13 @@ streamrelay-server
 
 Terminal output will display your local network addresses:
 ```
-[streamrelay] HTTP   http://192.168.1.50:9091/
-[streamrelay] HTTPS  https://192.168.1.50:9090/
-[streamrelay] SRT    srt://192.168.1.50:9092
+[streamrelay] HTTP   http://127.0.0.1:9091/
+[streamrelay] HTTPS  https://127.0.0.1:9090/
+[streamrelay] SRT    srt://127.0.0.1:9092
 ```
 
 1. Connect your phone or laptop to the same Wi-Fi / local network.
-2. Open the **HTTPS** URL in your browser (e.g., `https://192.168.1.50:9090/`).
+2. Open the **HTTPS** URL in your browser (e.g., `https://127.0.0.1:9090/`).
 3. Accept the self-signed TLS certificate (required by browsers for camera permissions):
    - **iOS Safari**: Tap *Show Details* → *visit this website*.
    - **Android Chrome**: Tap *Advanced* → *Proceed to ... (unsafe)*.
